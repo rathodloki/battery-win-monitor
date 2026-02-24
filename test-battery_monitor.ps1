@@ -1,31 +1,22 @@
 <#
 .SYNOPSIS
-    Monitors battery percentage and status, notifying the user when to plug/unplug.
-.DESCRIPTION
-    Runs in a loop every 60 seconds.
-    Notifies when:
-    - Battery >= 80% and Plugged In  -> Unplug
-    - Battery <= 20% and Unplugged   -> Plug in
-    Uses: Full-screen HD overlay banner (topmost), TTS speech, system tray balloon.
-.NOTES
-    Author: Antigravity
-    Date: 2026-02-24
+    Test script for battery_monitor banners.
+.USAGE
+    .\test-battery_monitor.ps1              # shows both banners (Low then High)
+    .\test-battery_monitor.ps1 -Test Low    # only the LOW banner
+    .\test-battery_monitor.ps1 -Test High   # only the HIGH banner
 #>
+
+param(
+    [ValidateSet("Low", "High", "Both")]
+    [string]$Test = "Both"
+)
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Speech
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SYSTEM TRAY ICON
-# ─────────────────────────────────────────────────────────────────────────────
-$notify = New-Object System.Windows.Forms.NotifyIcon
-$notify.Icon    = [System.Drawing.SystemIcons]::Application
-$notify.Visible = $true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BANNER SCRIPTBLOCK — runs in its own Runspace (STA thread)
-# Full-screen dark overlay with centred HD card — topmost above games/movies
 # ─────────────────────────────────────────────────────────────────────────────
 $bannerScript = {
     param([string]$Title, [string]$Message, [string]$Level)
@@ -45,10 +36,10 @@ $bannerScript = {
     $btnBg    = [System.Drawing.Color]::FromArgb(255, 32, 38, 52)
     $fillPct  = if ($Level -eq "Low") { 0.15 } else { 0.88 }
 
-    # ── Full-screen form ──────────────────────────────────────────────────────
-    # Use VirtualScreen so overlay always covers the FULL display at any DPI.
-    # NOTE: Do NOT call SetProcessDPIAware() here — it changes the coordinate
-    # system and makes the form cover only half the screen on high-DPI displays.
+    # ── Full-screen form  ─────────────────────────────────────────────────────
+    # Use VirtualScreen so the overlay always covers the FULL primary display
+    # regardless of DPI scaling level — do NOT call SetProcessDPIAware(), it
+    # breaks the coordinate system and shrinks the window on scaled displays.
     $sw = [System.Windows.Forms.SystemInformation]::VirtualScreen.Width
     $sh = [System.Windows.Forms.SystemInformation]::VirtualScreen.Height
 
@@ -58,7 +49,7 @@ $bannerScript = {
     $form.SetBounds(0, 0, $sw, $sh)
     $form.BackColor       = [System.Drawing.Color]::FromArgb(15, 18, 24)
     $form.Opacity         = 0.97
-    $form.TopMost         = $true        # stays above fullscreen games/movies
+    $form.TopMost         = $true
     $form.ShowInTaskbar   = $false
     $form.AutoScaleMode   = [System.Windows.Forms.AutoScaleMode]::None
 
@@ -71,7 +62,7 @@ $bannerScript = {
         [int](($sh - $cH) / 2),
         $cW, $cH
     )
-    $card.BackColor = $cardBg
+    $card.BackColor   = $cardBg
     $form.Controls.Add($card)
 
     # Left accent stripe
@@ -186,9 +177,9 @@ $bannerScript = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SHOW-BATTERYBANNER — non-blocking (BeginInvoke), monitor loop keeps running
+# Show-TestBanner: proper Runspace on STA thread, blocks until dismissed
 # ─────────────────────────────────────────────────────────────────────────────
-function Show-BatteryBanner {
+function Show-TestBanner {
     param([string]$Title, [string]$Message, [string]$Level = "Low")
 
     $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
@@ -199,72 +190,37 @@ function Show-BatteryBanner {
     $ps = [PowerShell]::Create()
     $ps.Runspace = $rs
     $ps.AddScript($bannerScript).AddArgument($Title).AddArgument($Message).AddArgument($Level) | Out-Null
-    $ps.BeginInvoke() | Out-Null   # fire-and-forget; monitor loop keeps running
+    $ps.Invoke()
+
+    $rs.Close(); $ps.Dispose()
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SEND-ALERT — Banner + Balloon + TTS
-# ─────────────────────────────────────────────────────────────────────────────
-function Send-Alert {
-    param([string]$Title, [string]$Message, [string]$Level = "Low")
+Write-Host ""
+Write-Host "========================================"
+Write-Host "  Battery Monitor - Banner Test Tool"
+Write-Host "========================================"
+Write-Host ""
 
-    Show-BatteryBanner -Title $Title -Message $Message -Level $Level
-
-    $notify.BalloonTipTitle = $Title
-    $notify.BalloonTipText  = $Message
-    $notify.BalloonTipIcon  = [System.Windows.Forms.ToolTipIcon]::Warning
-    $notify.ShowBalloonTip(10000)
-
-    try {
-        $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
-        $synth.SpeakAsync($Message) | Out-Null
-    } catch {}
+if ($Test -eq "Low" -or $Test -eq "Both") {
+    Write-Host "Showing LOW battery banner (dismiss or wait 15s)..."
+    Show-TestBanner `
+        -Title   "Battery Low (20%)" `
+        -Message "Battery low. Plug in your charger now to protect battery health." `
+        -Level   "Low"
+    Write-Host "  OK - Low banner closed."
+    Write-Host ""
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN MONITOR LOOP
-# ─────────────────────────────────────────────────────────────────────────────
-Write-Host "Battery Monitor Started... (Ctrl+C to stop)"
-Send-Alert -Title "Battery Monitor" -Message "Battery monitoring has started." -Level "High"
-
-$lastNotification = ""
-
-while ($true) {
-    try {
-        $battery = Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop
-        $percent = $battery.EstimatedChargeRemaining
-        $status  = $battery.BatteryStatus
-        # BatteryStatus: 1 = Discharging, 2 = AC Power
-
-        Write-Host "$(Get-Date -Format 'HH:mm:ss')  Battery: $percent%  Status: $status"
-
-        if ($percent -ge 80 -and $status -eq 2) {
-            if ($lastNotification -ne "High") {
-                Send-Alert `
-                    -Title   "Battery High ($percent%)" `
-                    -Message "Unplug your charger to protect battery health." `
-                    -Level   "High"
-                $lastNotification = "High"
-            }
-        }
-        elseif ($percent -le 20 -and $status -eq 1) {
-            if ($lastNotification -ne "Low") {
-                Send-Alert `
-                    -Title   "Battery Low ($percent%)" `
-                    -Message "Battery low. Plug in your charger now to protect battery health." `
-                    -Level   "Low"
-                $lastNotification = "Low"
-            }
-        }
-        else {
-            if ($percent -lt 78 -and $percent -gt 22)            { $lastNotification = "" }
-            if ($lastNotification -eq "High" -and $status -eq 1) { $lastNotification = "" }
-            if ($lastNotification -eq "Low"  -and $status -eq 2) { $lastNotification = "" }
-        }
-    }
-    catch {
-        Write-Error "Failed to get battery status: $_"
-    }
-
-    Start-Sleep -Seconds 60
+if ($Test -eq "High" -or $Test -eq "Both") {
+    Write-Host "Showing HIGH battery banner (dismiss or wait 15s)..."
+    Show-TestBanner `
+        -Title   "Battery High (80%)" `
+        -Message "Unplug your charger to protect battery health." `
+        -Level   "High"
+    Write-Host "  OK - High banner closed."
+    Write-Host ""
 }
+
+Write-Host "Test complete. Run battery_monitor.ps1 to start real monitoring."
+Write-Host ""
