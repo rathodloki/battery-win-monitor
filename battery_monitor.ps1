@@ -62,10 +62,6 @@ $scriptDir = if ($PSScriptRoot -and $PSScriptRoot -ne '') {
 }
 $bannerFile = Join-Path $scriptDir "banner_popup.ps1"
 
-# ── System Tray Icon ──────────────────────────────────────────────────────────
-$notify = New-Object System.Windows.Forms.NotifyIcon
-$notify.Icon    = [System.Drawing.SystemIcons]::Application
-$notify.Visible = $true
 
 # ── Show-BatteryBanner ────────────────────────────────────────────────────────
 function Show-BatteryBanner {
@@ -90,14 +86,6 @@ function Send-Alert {
 
     # 1) Popup banner (separate process, non-blocking)
     Show-BatteryBanner -Title $Title -Message $Message -Level $Level
-
-    # 2) System tray balloon
-    try {
-        $script:notify.BalloonTipTitle = $Title
-        $script:notify.BalloonTipText  = $Message
-        $script:notify.BalloonTipIcon  = [System.Windows.Forms.ToolTipIcon]::Warning
-        $script:notify.ShowBalloonTip(10000)
-    } catch {}
 
     # 3) Text-to-Speech
     try {
