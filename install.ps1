@@ -7,7 +7,8 @@ try {
     Write-Host "Startup Directory: $StartupDir"
 
     $ShortcutPath = Join-Path -Path $StartupDir -ChildPath "BatteryMonitor.lnk"
-    $Target = "C:\Users\ratho\.gemini\antigravity\playground\ultraviolet-nova\run_hidden.vbs"
+    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $Target = Join-Path $ScriptDir "run_hidden.vbs"
 
     $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
     $Shortcut.TargetPath = $Target
