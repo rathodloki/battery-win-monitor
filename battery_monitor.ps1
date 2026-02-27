@@ -8,15 +8,13 @@
     Notifies when:
     - Battery >= 80% and Plugged In  -> Unplug
     - Battery <= 20% and Unplugged   -> Plug in
-    Uses: banner_popup.ps1 (separate process), TTS speech, system tray balloon.
+    Uses: banner_popup.ps1 (separate process), TTS speech.
 .NOTES
     Author: Antigravity
     Date: 2026-02-25
 #>
 $ErrorActionPreference = "Continue"
 
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
 try { Add-Type -AssemblyName System.Speech } catch {}
 
 # ── C# User Activity Detection ────────────────────────────────────────────────
@@ -55,9 +53,11 @@ function Get-UserIdleTime {
 # ── Resolve the directory this script lives in (works in all launch modes) ───
 $scriptDir = if ($PSScriptRoot -and $PSScriptRoot -ne '') {
     $PSScriptRoot
-} elseif ($MyInvocation.MyCommand.Path) {
+}
+elseif ($MyInvocation.MyCommand.Path) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
-} else {
+}
+else {
     $PWD.Path
 }
 $bannerFile = Join-Path $scriptDir "banner_popup.ps1"
@@ -67,15 +67,16 @@ $bannerFile = Join-Path $scriptDir "banner_popup.ps1"
 function Show-BatteryBanner {
     param([string]$Title, [string]$Message, [string]$Level = "Low")
     try {
-        $bf  = $script:bannerFile -replace "'", "''"
-        $t   = $Title   -replace "'", "''"
-        $m   = $Message -replace "'", "''"
+        $bf = $script:bannerFile -replace "'", "''"
+        $t = $Title -replace "'", "''"
+        $m = $Message -replace "'", "''"
         $cmd = "& '$bf' -Title '$t' -Message '$m' -Level '$Level'"
         $enc = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($cmd))
         Start-Process -FilePath "powershell.exe" `
             -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $enc" `
             -WindowStyle Hidden -ErrorAction Stop
-    } catch {
+    }
+    catch {
         Write-Host "  [Banner] Warning: could not show banner: $_"
     }
 }
@@ -91,14 +92,16 @@ function Send-Alert {
     try {
         $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
         try { $synth.SelectVoice("Microsoft Zira Desktop") } catch {}
-        $synth.SpeakAsync($Message) | Out-Null
-    } catch {}
+        $synth.Speak($Message) | Out-Null
+        $synth.Dispose()
+    }
+    catch {}
 }
 
 # ── Configuration Variables ───────────────────────────────────────────────────
-$nagIntervalMinutes   = 3
+$nagIntervalMinutes = 3
 $idleThresholdSeconds = 120 # Considers the user "away" if idle for 2 minutes
-$lastNotification     = ""
+$lastNotification = ""
 $lastNotificationTime = [DateTime]::MinValue
 
 Write-Host "Battery Monitor Started... (Ctrl+C to stop)"
@@ -110,22 +113,25 @@ Send-Alert -Title "Battery Monitor" -Message "Battery monitoring has started." -
 # ── Main Monitor Loop ─────────────────────────────────────────────────────────
 while ($true) {
     try {
-        $battery = Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop
-        $percent = $battery.EstimatedChargeRemaining
-        $status  = $battery.BatteryStatus
-        # BatteryStatus: 1 = Discharging, 2 = AC Power
+        $batteries = @(Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop)
+        
+        # Average out the remaining charge across all batteries
+        $percent = [Math]::Round(($batteries | Measure-Object -Property EstimatedChargeRemaining -Average).Average)
+        
+        # Determine if it's plugged in (1 = Discharging. Anything else = Plugged In/Charging)
+        $isPluggedIn = ($batteries[0].BatteryStatus -ne 1)
 
         # Check how long the user has been idle
         $idleSeconds = Get-UserIdleTime
         
-        Write-Host "$(Get-Date -Format 'HH:mm:ss')  Battery: $percent%  Status: $status  Idle: $idleSeconds sec"
+        Write-Host "$(Get-Date -Format 'HH:mm:ss')  Battery: $percent%  Plugged In: $isPluggedIn  Idle: $idleSeconds sec"
 
         # Boolean flags to make the logic readable
         $isUserActive = $idleSeconds -lt $idleThresholdSeconds
         $timeSinceLastAlert = (Get-Date) - $lastNotificationTime
 
         # ── HIGH BATTERY (>= 80% & Plugged In) ──
-        if ($percent -ge 80 -and $status -eq 2) {
+        if ($percent -ge 80 -and $isPluggedIn) {
             # Alert if we haven't sent one yet, OR if 5 minutes have passed
             $needsAlert = ($lastNotification -ne "High") -or ($timeSinceLastAlert.TotalMinutes -ge $nagIntervalMinutes)
             
@@ -144,7 +150,7 @@ while ($true) {
         }
         
         # ── LOW BATTERY (<= 20% & Unplugged) ──
-        elseif ($percent -le 20 -and $status -eq 1) {
+        elseif ($percent -le 20 -and -not $isPluggedIn) {
             $needsAlert = ($lastNotification -ne "Low") -or ($timeSinceLastAlert.TotalMinutes -ge $nagIntervalMinutes)
             
             if ($needsAlert -and $isUserActive) {
@@ -164,9 +170,9 @@ while ($true) {
         # ── RESET STATE ──
         else {
             # If battery is in the safe zone, or the user fixed the issue, reset the tracker
-            if ($percent -gt 22 -and $percent -lt 78)            { $lastNotification = "" }
-            if ($lastNotification -eq "High" -and $status -eq 1) { $lastNotification = "" }
-            if ($lastNotification -eq "Low"  -and $status -eq 2) { $lastNotification = "" }
+            if ($percent -gt 22 -and $percent -lt 78) { $lastNotification = "" }
+            if ($lastNotification -eq "High" -and -not $isPluggedIn) { $lastNotification = "" }
+            if ($lastNotification -eq "Low" -and $isPluggedIn) { $lastNotification = "" }
         }
     }
     catch {

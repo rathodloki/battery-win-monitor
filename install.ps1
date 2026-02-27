@@ -7,7 +7,7 @@ try {
     Write-Host "Startup Directory: $StartupDir"
 
     $ShortcutPath = Join-Path -Path $StartupDir -ChildPath "BatteryMonitor.lnk"
-    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $ScriptDir = $PSScriptRoot
     $Target = Join-Path $ScriptDir "run_hidden.vbs"
 
     $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
